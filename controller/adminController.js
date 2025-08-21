@@ -171,3 +171,141 @@ exports.updateSubscriptionAdminStatus = async (req, res) => {
     return res.status(500).json({ message: 'Server error' });
   }
 };
+
+
+exports.listSubscriptions = async (req, res) => {
+  try {
+    let {
+      page = 1,
+      limit = 10,
+      sortBy = 'createdAt',   // default: latest first by createdAt
+      sortOrder = 'desc',     // 'asc' or 'desc'
+      Status,                 // optional filter: 0 or 1
+      q                       // optional text search across a few fields
+    } = req.body || {};
+
+    // sanitize numbers
+    page = Math.max(parseInt(page, 10) || 1, 1);
+    limit = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+
+    // build filter
+    const filter = {};
+    if (Status === 0 || Status === 1 || Status === '0' || Status === '1') {
+      filter.Status = Number(Status);
+    }
+
+    // simple text search (adjust fields to your schema)
+    if (q && String(q).trim()) {
+      const rx = new RegExp(String(q).trim(), 'i');
+      filter.$or = [
+        { subscriptionId: rx },
+        { email: rx },
+        { userId: rx },
+        { planName: rx }
+      ];
+    }
+
+    // sort: latest on top by default (+ _id tiebreaker)
+    const sort = {};
+    sort[sortBy] = String(sortOrder).toLowerCase() === 'asc' ? 1 : -1;
+    if (!sort._id) sort._id = -1;
+
+    const skip = (page - 1) * limit;
+
+    // --- Aggregation pipeline: match, sort, page, then lookup plan+pricing by pricingId ---
+    const pipeline = [
+      { $match: filter },
+
+      // sorting + paging
+      { $sort: sort },
+      { $skip: skip },
+      { $limit: limit },
+
+      // join with plans to extract the single pricing subdocument matching subscription.pricingId
+      {
+        $lookup: {
+          from: 'plans', // Mongoose pluralizes 'Plan' -> 'plans'
+          let: {
+            pricingId: '$pricingId',
+            subPlanId: '$planId' // optional: if your Subscription stores planId (uuid)
+          },
+          pipeline: [
+            {
+              // If we have planId on the subscription, ensure the plan matches AND contains the pricingId.
+              // Otherwise, match any plan that contains the pricingId.
+              $match: {
+                $expr: {
+                  $cond: [
+                    { $gt: [{ $ifNull: ['$$subPlanId', ''] }, ''] },
+                    {
+                      $and: [
+                        { $eq: ['$planId', '$$subPlanId'] },
+                        { $in: ['$$pricingId', '$pricing.pricingId'] }
+                      ]
+                    },
+                    { $in: ['$$pricingId', '$pricing.pricingId'] }
+                  ]
+                }
+              }
+            },
+            {
+              // keep only the one pricing entry we care about
+              $project: {
+                planId: 1,
+                name: 1,
+                status: 1,
+                pricing: {
+                  $filter: {
+                    input: '$pricing',
+                    as: 'p',
+                    cond: { $eq: ['$$p.pricingId', '$$pricingId'] }
+                  }
+                }
+              }
+            },
+            // unwrap the single matched pricing (if any)
+            { $unwind: { path: '$pricing', preserveNullAndEmptyArrays: true } }
+          ],
+          as: 'planJoin'
+        }
+      },
+      { $unwind: { path: '$planJoin', preserveNullAndEmptyArrays: true } },
+
+      // shape final output: attach plan + pricing; keep existing planName if you already store it
+      {
+        $addFields: {
+          plan: {
+            planId: '$planJoin.planId',
+            name: '$planJoin.name',
+            status: '$planJoin.status'
+          },
+          pricing: '$planJoin.pricing',
+          // if you don't store planName on subscription, this ensures it's present
+          planName: { $ifNull: ['$planName', '$planJoin.name'] }
+        }
+      },
+      { $project: { planJoin: 0 } }
+    ];
+
+    const [data, total] = await Promise.all([
+      Subscription.aggregate(pipeline).exec(),
+      Subscription.countDocuments(filter)
+    ]);
+
+    return res.json({
+      message: 'Subscriptions fetched',
+      paging: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+        hasNext: page * limit < total,
+        hasPrev: page > 1
+      },
+      data
+    });
+  } catch (err) {
+    console.error('listSubscriptions error:', err);
+    return res.status(500).json({ message: 'Server error' });
+  }
+};

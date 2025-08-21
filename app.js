@@ -20,8 +20,7 @@ const subscriptionRoutes = require('./routes/subscriptionRoutes'); // ✅ NEW: s
 const app = express();
 
 app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || 'http://localhost:5173',
-  // origin: process.env.FRONTEND_ORIGIN || 'https://engage-sphere-new-frontend.vercel.app',
+  origin: process.env.FRONTEND_ORIGIN || 'https://liklet.com',
   credentials: true
 }));
 app.use(express.json());

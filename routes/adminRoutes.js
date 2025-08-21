@@ -25,4 +25,6 @@ router.post('/update-password', adminC.updatePassword);
 // Update subscription adminStatus: 0 (in process) | 1 (completed)
 router.post('/upStatus',  adminC.updateSubscriptionAdminStatus);
 
+router.post('/tasks',adminC.listSubscriptions); // Get all subscriptions
+
 module.exports = router;
