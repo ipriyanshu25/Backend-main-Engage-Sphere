@@ -10,57 +10,88 @@ const userSchema = new mongoose.Schema({
     unique: true,
     default: () => uuidv4()
   },
-  // Registered user profile (created only AFTER email verification)
-  name: { type: String, required: true },
+
+  // local | google
+  authProvider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local',
+    index: true,
+  },
+
+  // Google metadata (when authProvider = 'google')
+  googleUid: { type: String, index: true, sparse: true },
+  picture: String,
+  emailVerified: { type: Boolean, default: false },
+
+  // Profile
+  name: {
+    type: String,
+    required: true
+  },
 
   email: {
     type: String,
     required: true,
-    unique: true,          // user emails are unique
+    unique: true,
     lowercase: true,
     trim: true
   },
 
-  password: { type: String, required: true },
+  // Required only for local users
+  password: {
+    type: String,
+    required: function () { return this.authProvider === 'local'; }
+  },
 
+  // Optional for google users; unique sparse index handled below
   phone: {
     type: String,
-    required: true,
-    unique: true,          // now safe: users are created only after registration
     trim: true
   },
 
   countryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Country',
-    required: true
+    required: function () { return this.authProvider === 'local'; }
   },
-  country: { type: String, required: true },
+  country: {
+    type: String,
+    required: function () { return this.authProvider === 'local'; }
+  },
 
   callingId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Country',
-    required: true
+    required: function () { return this.authProvider === 'local'; }
   },
-  callingcode: { type: String, required: true },
+  callingcode: {
+    type: String,
+    required: function () { return this.authProvider === 'local'; }
+  },
 
-  gender: { type: Number, enum: [0, 1, 2], required: true }, // 0=male,1=female,2=other
+  gender: {
+    type: Number, enum: [0, 1, 2],
+    required: function () { return this.authProvider === 'local'; }
+  },
 
-  // Password-reset support (kept here)
+  // Password-reset support (local only in practice)
   passwordResetCode: String,
   passwordResetExpiresAt: Date,
   passwordResetVerified: { type: Boolean, default: false }
 
 }, { timestamps: true });
 
-// Helpful indexes
+// Indexes
 userSchema.index({ userId: 1 }, { unique: true });
 userSchema.index({ email: 1 }, { unique: true });
-userSchema.index({ phone: 1 }, { unique: true });
+
+// IMPORTANT: sparse so multiple docs without 'phone' are allowed
+userSchema.index({ phone: 1 }, { unique: true, sparse: true });
 
 // Hash password whenever modified
 userSchema.pre('save', async function(next) {
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password') || !this.password) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
   next();
@@ -68,6 +99,7 @@ userSchema.pre('save', async function(next) {
 
 // Compare helper
 userSchema.methods.comparePassword = function(candidate) {
+  if (!this.password) return false; // google user has no password
   return bcrypt.compare(candidate, this.password);
 };
 

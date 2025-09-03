@@ -1,5 +1,6 @@
 // controllers/userController.js
 const jwt           = require('jsonwebtoken');
+const admin = require('../server/firebase');
 const nodemailer    = require('nodemailer');
 const User          = require('../model/user');
 const VerifiedEmail = require('../model/VerifiedEmail');
@@ -476,6 +477,83 @@ exports.resetPassword = async (req, res) => {
     return res.json({ message: 'Password reset successfully' });
   } catch (err) {
     console.error('resetPassword error:', err);
+    return res.status(500).json({ message: 'Internal server error' });
+  }
+};
+
+
+
+
+exports.googleSignIn = async (req, res) => {
+  try {
+    const { idToken } = req.body;
+    if (!idToken) return res.status(400).json({ message: 'idToken is required' });
+
+    const decoded = await admin.auth().verifyIdToken(idToken);
+    // decoded contains: uid, email, email_verified, name, picture, etc.
+    const {
+      uid,
+      email,
+      email_verified: emailVerified,
+      name,
+      picture,
+    } = decoded;
+
+    if (!email) {
+      return res.status(400).json({ message: 'Google account has no email' });
+    }
+
+    const normEmail = email.trim().toLowerCase();
+
+    // Find by email (single-account policy)
+    let user = await User.findOne({ email: normEmail });
+
+    if (!user) {
+      // Create minimal google user; local-only required fields are conditionally skipped
+      user = new User({
+        authProvider: 'google',
+        googleUid: uid,
+        email: normEmail,
+        name: name || normEmail.split('@')[0],
+        picture,
+        emailVerified: !!emailVerified,
+      });
+      await user.save();
+    } else {
+      // Update metadata if changed; do NOT override local profile data
+      const updates = {};
+      if (!user.googleUid) updates.googleUid = uid;
+      if (typeof emailVerified === 'boolean') updates.emailVerified = emailVerified;
+      if (picture && !user.picture) updates.picture = picture;
+      if (name && !user.name) updates.name = name;
+      if (user.authProvider !== 'google') updates.authProvider = user.authProvider || 'google'; // keep existing if local
+
+      if (Object.keys(updates).length) {
+        await User.updateOne({ _id: user._id }, { $set: updates });
+        user = await User.findById(user._id);
+      }
+    }
+
+    // Issue your app JWT
+    const token = jwt.sign({ userId: user.userId }, process.env.JWT_SECRET, { expiresIn: '100d' });
+
+    const safeUser = {
+      id        : user.userId,
+      name      : user.name,
+      email     : user.email,
+      phone     : user.phone || '',
+      countryId : user.countryId || '',
+      callingId : user.callingId || '',
+      gender    : typeof user.gender === 'number' ? String(user.gender) : '',
+      createdAt : user.createdAt,
+      picture   : user.picture || '',
+      emailVerified: !!user.emailVerified,
+      authProvider : user.authProvider,
+    };
+
+    return res.json({ message: 'Login successful', token, userId: user.userId, user: safeUser });
+  } catch (err) {
+    console.error('googleSignIn error:', err);
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
