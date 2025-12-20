@@ -44,6 +44,9 @@ router.post('/getAll', uc.getAll);
 
 router.post('/google', uc.googleSignIn);
 
+router.post("/userlite", uc.verifyToken, uc.getUserLite);
+
+
 // ─── (Optional) direct lookup by param ──────────────────────────
 // router.get('/:id', uc.verifyToken, adminOnly, uc.getById);
 

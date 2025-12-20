@@ -557,3 +557,34 @@ exports.googleSignIn = async (req, res) => {
     return res.status(500).json({ message: 'Internal server error' });
   }
 };
+
+
+exports.getUserLite = async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    if (!userId) {
+      return res.status(400).json({ message: "userId is required" });
+    }
+
+    const user = await User.findOne({ userId })
+      .select("userId name email country")
+      .lean();
+
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    return res.status(200).json({
+      data: {
+        userId: user.userId,
+        name: user.name || "",
+        email: user.email || "",
+        country: user.country || "",
+      },
+    });
+  } catch (err) {
+    console.error("getUserLite error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
