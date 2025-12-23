@@ -1,10 +1,11 @@
-// ✅ Load environment variables from .env file
+// app.js (or server.js)
 require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
 const mongoose = require("mongoose");
 const path = require("path");
+const cookieParser = require("cookie-parser");
 
 // ✅ Import Routes
 const userRoutes = require("./routes/userRoutes");
@@ -19,20 +20,48 @@ const subscriptionRoutes = require("./routes/subscriptionRoutes");
 
 const app = express();
 
+// ✅ if behind nginx/vercel/proxy in production (needed for secure cookies)
+app.set("trust proxy", 1);
+
+// -----------------------------
+// ✅ CORS (robust origin handling)
+// -----------------------------
+const defaultOrigins = [
+  "https://liklet.com",
+  "http://localhost:3000",
+  "http://localhost:5173",
+];
+
+// FRONTEND_ORIGIN can be:
+// 1) single origin: "http://localhost:3000"
+// 2) comma separated: "http://localhost:3000,https://liklet.com"
+const envOrigins = (process.env.FRONTEND_ORIGIN || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const allowedOrigins = envOrigins.length ? envOrigins : defaultOrigins;
+
 app.use(
   cors({
-    origin:
-      process.env.FRONTEND_ORIGIN || [
-        "https://liklet.com",
-        "http://localhost:3000",
-        "http://localhost:5173",
-      ],
+    origin: function (origin, cb) {
+      // allow tools like Postman (no origin)
+      if (!origin) return cb(null, true);
+
+      if (allowedOrigins.includes(origin)) return cb(null, true);
+
+      return cb(new Error(`CORS blocked for origin: ${origin}`), false);
+    },
     credentials: true,
   })
 );
 
-app.use(express.json());
+// -----------------------------
+// ✅ body parsing + cookies
+// -----------------------------
+app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // ✅ serve uploads folder
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
@@ -59,8 +88,6 @@ mongoose
     // ✅ ✅ PUT THE INDEX FIX CODE HERE (BEFORE app.listen)
     try {
       const db = mongoose.connection.db;
-
-      // your error shows: test.services -> collection is "services"
       const col = db.collection("services");
 
       const idx = await col.indexes();
@@ -76,7 +103,6 @@ mongoose
         console.log("✅ Dropped index: serviceContent.contentId_1_1");
       }
 
-      // now sync indexes based on current schema
       const ServicesModel = require("./model/services");
       await ServicesModel.syncIndexes();
       console.log("✅ Services syncIndexes done");
@@ -87,9 +113,12 @@ mongoose
     // ✅ start server AFTER cleanup
     app.listen(PORT, () => {
       console.log(`🚀 Server listening on port ${PORT}`);
+      console.log("✅ Allowed Origins:", allowedOrigins);
     });
   })
   .catch((err) => {
     console.error("❌ MongoDB connection error:", err.message);
     process.exit(1);
   });
+
+module.exports = app;

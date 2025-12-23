@@ -2,10 +2,60 @@
 
 const Plan = require('../model/plan');
 
-/**
- * Get all plans
- * POST /api/plans/all
- */
+
+exports.createPlan = async (req, res) => {
+  try {
+    const { serviceId, subServiceId, name, pricing, status } = req.body;
+
+    if (!serviceId || !subServiceId) {
+      return res.status(400).json({ message: "serviceId and subServiceId are required" });
+    }
+
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ message: "name is required" });
+    }
+
+    if (!Array.isArray(pricing) || pricing.length === 0) {
+      return res.status(400).json({ message: "pricing must be a non-empty array" });
+    }
+
+    // ✅ prevent duplicates
+    const exists = await Plan.findOne({ serviceId, subServiceId });
+    if (exists) {
+      return res.status(409).json({
+        message: "Plan already exists for this subService. Use update API instead.",
+        planId: exists.planId,
+      });
+    }
+
+    const doc = new Plan({
+      serviceId,
+      subServiceId,
+      name: String(name).trim(),
+      pricing,
+      status: status || "Active",
+    });
+
+    await doc.save();
+
+    return res.status(201).json({
+      message: "Plan created successfully",
+      planId: doc.planId,
+      data: doc,
+    });
+  } catch (err) {
+    console.error("❌ createPlan error:", err);
+
+    // duplicate unique index
+    if (err?.code === 11000) {
+      return res.status(409).json({ message: "Duplicate plan for this service/subservice" });
+    }
+
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+
 exports.getAllPlans = async (req, res) => {
   // pull pagination/search out of body, with defaults
   const { page = 1, limit = 10, search = '' } = req.body;
@@ -162,5 +212,46 @@ exports.getPlanByName = async (req, res) => {
   } catch (err) {
     console.error('❌ getPlanByName error:', err);
     return res.status(500).json({ error: err.message });
+  }
+};
+
+// POST /plan/getByServiceAndSubServiceId  { serviceId?, subServiceId? }
+exports.getByServiceAndSubServiceId = async (req, res) => {
+  try {
+    const { serviceId, subServiceId } = req.body;
+
+    if (!serviceId && !subServiceId) {
+      return res.status(400).json({
+        message: "serviceId or subServiceId is required",
+      });
+    }
+
+    // ✅ Best case: both provided -> exact match
+    if (serviceId && subServiceId) {
+      const data = await Plan.findOne({ serviceId, subServiceId });
+      if (!data) return res.status(404).json({ message: "Plan not found" });
+
+      return res.status(200).json({ data });
+    }
+
+    // ✅ If only subServiceId provided
+    if (subServiceId) {
+      const data = await Plan.findOne({ subServiceId });
+      if (!data) return res.status(404).json({ message: "Plan not found" });
+
+      return res.status(200).json({ data });
+    }
+
+    // ✅ If only serviceId provided (return all plans under service)
+    const data = await Plan.find({ serviceId }).sort({ createdAt: -1 });
+
+    if (!data?.length) {
+      return res.status(404).json({ message: "No plans found for this serviceId" });
+    }
+
+    return res.status(200).json({ data });
+  } catch (e) {
+    console.error("getByServiceAndSubServiceId error:", e);
+    return res.status(500).json({ message: "Internal server error" });
   }
 };

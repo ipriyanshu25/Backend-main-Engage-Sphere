@@ -150,3 +150,108 @@ exports.getSubServiceById = async (req, res) => {
     return res.status(500).json({ message: "Internal server error" });
   }
 };
+
+
+exports.updateService = async (req, res) => {
+  try {
+    const { serviceId, serviceHeading, serviceDescription, serviceContent } = req.body;
+
+    if (!serviceId) {
+      return res.status(400).json({ message: "serviceId is required" });
+    }
+
+    const service = await Services.findOne({ serviceId });
+    if (!service) {
+      return res.status(404).json({ message: "Service not found" });
+    }
+
+    // Update fields if they are provided
+    if (serviceHeading) service.serviceHeading = serviceHeading;
+    if (serviceDescription) service.serviceDescription = serviceDescription;
+
+    // Handle serviceContent (it comes as a JSON string from form-data)
+    if (serviceContent) {
+      try {
+        const parsed = typeof serviceContent === "string" 
+          ? JSON.parse(serviceContent) 
+          : serviceContent;
+        if (Array.isArray(parsed)) service.serviceContent = parsed;
+      } catch (e) {
+        return res.status(400).json({ message: "serviceContent must be a valid JSON array" });
+      }
+    }
+
+    // Handle Logo Update
+    if (req.file) {
+      service.logo = makeLogoPath(req);
+    }
+
+    await service.save();
+
+    return res.status(200).json({
+      message: "Service updated successfully",
+      data: service,
+    });
+  } catch (err) {
+    console.error("updateService error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+// POST /service/subservice/update
+exports.updateSubService = async (req, res) => {
+  try {
+    const { serviceId, subServiceId, subServiceHeading, subServiceDescription, subServiceContent } = req.body;
+
+    if (!serviceId || !subServiceId) {
+      return res.status(400).json({ message: "serviceId and subServiceId are required" });
+    }
+
+    // Find the parent service
+    const service = await Services.findOne({ serviceId });
+    if (!service) {
+      return res.status(404).json({ message: "Parent Service not found" });
+    }
+
+    // Find the specific subservice index
+    const subServiceIndex = service.subServices.findIndex(s => s.subServiceId === subServiceId);
+    if (subServiceIndex === -1) {
+      return res.status(404).json({ message: "SubService not found" });
+    }
+
+    // Get reference to the subservice object
+    const sub = service.subServices[subServiceIndex];
+
+    // Update fields if provided
+    if (subServiceHeading) sub.subServiceHeading = subServiceHeading;
+    if (subServiceDescription) sub.subServiceDescription = subServiceDescription;
+
+    // Handle subServiceContent parsing
+    if (subServiceContent) {
+      try {
+        const parsed = typeof subServiceContent === "string" 
+          ? JSON.parse(subServiceContent) 
+          : subServiceContent;
+        if (Array.isArray(parsed)) sub.subServiceContent = parsed;
+      } catch (e) {
+        return res.status(400).json({ message: "subServiceContent must be a valid JSON array" });
+      }
+    }
+
+    // Handle Logo Update for SubService
+    if (req.file) {
+      sub.logo = makeLogoPath(req);
+    }
+
+    // Save the parent document to persist subdocument changes
+    await service.save();
+
+    return res.status(200).json({
+      message: "SubService updated successfully",
+      data: service.subServices[subServiceIndex],
+    });
+  } catch (err) {
+    console.error("updateSubService error:", err);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};

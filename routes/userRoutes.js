@@ -46,6 +46,9 @@ router.post('/google', uc.googleSignIn);
 
 router.post("/userlite", uc.verifyToken, uc.getUserLite);
 
+router.post("/refresh-token", uc.refreshToken);
+router.post("/logout", uc.logoutUser);
+
 
 // ─── (Optional) direct lookup by param ──────────────────────────
 // router.get('/:id', uc.verifyToken, adminOnly, uc.getById);
