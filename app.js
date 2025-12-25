@@ -30,6 +30,7 @@ const defaultOrigins = [
   "https://liklet.com",
   "http://localhost:3000",
   "http://localhost:5173",
+  "https://liklet-git-main-ipriyanshu25s-projects.vercel.app/"
 ];
 
 // FRONTEND_ORIGIN can be:
