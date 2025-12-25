@@ -1,6 +1,6 @@
 // model/User.js
-const mongoose   = require('mongoose');
-const bcrypt     = require('bcryptjs');
+const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 
 const userSchema = new mongoose.Schema({
@@ -38,6 +38,16 @@ const userSchema = new mongoose.Schema({
     trim: true
   },
 
+  socialMedia: [
+    {
+      platform: {
+        type: String,
+        enum: ["instagram", "youtube", "linkedin"],
+        required: true,
+      },
+      url: { type: String, trim: true, default: "" },
+    },
+  ],
   // Required only for local users
   password: {
     type: String,
@@ -75,6 +85,10 @@ const userSchema = new mongoose.Schema({
     required: function () { return this.authProvider === 'local'; }
   },
 
+  pendingEmail: { type: String, lowercase: true, trim: true }, // new email waiting for verification
+  emailChangeCodeHash: { type: String },                       // hashed OTP
+  emailChangeExpiresAt: { type: Date },
+  emailChangeVerified: { type: Boolean, default: false },
   // Password-reset support (local only in practice)
   passwordResetCode: String,
   passwordResetExpiresAt: Date,
@@ -90,7 +104,7 @@ userSchema.index({ email: 1 }, { unique: true });
 userSchema.index({ phone: 1 }, { unique: true, sparse: true });
 
 // Hash password whenever modified
-userSchema.pre('save', async function(next) {
+userSchema.pre('save', async function (next) {
   if (!this.isModified('password') || !this.password) return next();
   const salt = await bcrypt.genSalt(10);
   this.password = await bcrypt.hash(this.password, salt);
@@ -98,7 +112,7 @@ userSchema.pre('save', async function(next) {
 });
 
 // Compare helper
-userSchema.methods.comparePassword = function(candidate) {
+userSchema.methods.comparePassword = function (candidate) {
   if (!this.password) return false; // google user has no password
   return bcrypt.compare(candidate, this.password);
 };

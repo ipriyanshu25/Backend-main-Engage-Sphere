@@ -1,13 +1,16 @@
 // controllers/userController.js
 const jwt = require("jsonwebtoken");
-const admin = require("../server/firebase");
+const admin = require("../server/firebase"); // Ensure this path is correct
 const nodemailer = require("nodemailer");
-
+const bcrypt = require("bcryptjs");
 const User = require("../model/user");
 const VerifiedEmail = require("../model/VerifiedEmail");
 const Country = require("../model/country");
 const Subscription = require("../model/Subscription");
 
+// -----------------------------
+// 🌍 CONFIGURATION & CONSTANTS
+// -----------------------------
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error(
@@ -16,70 +19,30 @@ if (!JWT_SECRET) {
 }
 
 const IS_PROD = process.env.NODE_ENV === "production";
+const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || "15d";
+const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "7d";
+const COOKIE_SAMESITE = (process.env.COOKIE_SAMESITE || "lax").toLowerCase();
 
-// -----------------------------
-// ✅ Token Settings (secure defaults)
-// -----------------------------
-const ACCESS_TOKEN_EXPIRES_IN = process.env.ACCESS_TOKEN_EXPIRES_IN || "15m"; // short-lived
-const REFRESH_TOKEN_EXPIRES_IN = process.env.REFRESH_TOKEN_EXPIRES_IN || "7d"; // longer
-
-// If your frontend & backend are on same site (liklet.com + api.liklet.com), "lax" is best.
-// If you truly do cross-site (different registrable domains), use "none" + secure true.
-const COOKIE_SAMESITE =
-  (process.env.COOKIE_SAMESITE || "lax").toLowerCase(); // 'lax' | 'strict' | 'none'
-
-// Base cookie config
+// Cookie Configuration
 const cookieBase = {
   httpOnly: true,
-  secure: IS_PROD, // must be true in prod for HTTPS
-  sameSite: COOKIE_SAMESITE, // 'lax' recommended
+  secure: IS_PROD,
+  sameSite: COOKIE_SAMESITE,
 };
 
-// Helper: parse ms-like ages for cookie maxAge
-const MS = {
-  min: 60 * 1000,
-  day: 24 * 60 * 60 * 1000,
-};
+const MS = { min: 60 * 1000, day: 24 * 60 * 60 * 1000 };
+const ACCESS_COOKIE_MAX_AGE = Number(process.env.ACCESS_COOKIE_MAX_AGE_MS) || 15 * MS.min;
+const REFRESH_COOKIE_MAX_AGE = Number(process.env.REFRESH_COOKIE_MAX_AGE_MS) || 7 * MS.day;
 
-const ACCESS_COOKIE_MAX_AGE =
-  Number(process.env.ACCESS_COOKIE_MAX_AGE_MS) || 15 * MS.min;
-const REFRESH_COOKIE_MAX_AGE =
-  Number(process.env.REFRESH_COOKIE_MAX_AGE_MS) || 7 * MS.day;
+// -----------------------------
+// 📧 EMAIL TEMPLATE & CONFIGURATION
+// -----------------------------
 
-function signAccessToken(userId) {
-  return jwt.sign({ userId, type: "access" }, JWT_SECRET, {
-    expiresIn: ACCESS_TOKEN_EXPIRES_IN,
-  });
-}
+// REPLACE THIS with your actual hosted logo URL (e.g. AWS S3, Cloudinary, or your public website)
+const COMPANY_LOGO_URL = "https://liklet.com/favicon.ico"; 
+const COMPANY_NAME = "LikLet";
+const SUPPORT_LINK = "https://liklet.com/contact";
 
-function signRefreshToken(userId) {
-  return jwt.sign({ userId, type: "refresh" }, JWT_SECRET, {
-    expiresIn: REFRESH_TOKEN_EXPIRES_IN,
-  });
-}
-
-function setAuthCookies(res, { accessToken, refreshToken }) {
-  // Access cookie available for all routes
-  res.cookie("accessToken", accessToken, {
-    ...cookieBase,
-    maxAge: ACCESS_COOKIE_MAX_AGE,
-    path: "/",
-  });
-
-  // Refresh cookie ideally scoped to refresh endpoint (limits attack surface)
-  res.cookie("refreshToken", refreshToken, {
-    ...cookieBase,
-    maxAge: REFRESH_COOKIE_MAX_AGE,
-    path: "/user/refresh-token",
-  });
-}
-
-function clearAuthCookies(res) {
-  res.clearCookie("accessToken", { path: "/" });
-  res.clearCookie("refreshToken", { path: "/user/refresh-token" });
-}
-
-// SMTP transporter (fill in your .env)
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
   port: +process.env.SMTP_PORT,
@@ -91,17 +54,155 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
+ * Generates a responsive HTML email template.
+ * @param {string} title - The main heading
+ * @param {string} message - The body text
+ * @param {string} otp - The 6-digit code
+ */
+const getEmailTemplate = (title, message, otp) => {
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <style>
+    body { margin: 0; padding: 0; background-color: #f8fafc; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; -webkit-font-smoothing: antialiased; }
+    .container { max-width: 600px; margin: 40px auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06); }
+    .header { background: #0f172a; padding: 32px 0; text-align: center; }
+    .logo-container { display: inline-flex; align-items: center; justify-content: center; background: white; border-radius: 12px; padding: 8px; }
+    .logo { height: 40px; width: 40px; object-fit: contain; }
+    .brand-name { color: white; font-size: 24px; font-weight: 700; margin-left: 12px; vertical-align: middle; display: inline-block; }
+    .content { padding: 40px 32px; text-align: center; }
+    .h1 { color: #1e293b; font-size: 24px; font-weight: 700; margin: 0 0 16px; }
+    .p { color: #64748b; font-size: 16px; line-height: 24px; margin: 0 0 24px; }
+    .otp-wrapper { margin: 32px 0; }
+    .otp { background: #f1f5f9; color: #0f172a; font-size: 36px; font-weight: 800; letter-spacing: 8px; padding: 16px 32px; border-radius: 12px; border: 2px dashed #cbd5e1; display: inline-block; }
+    .footer { background-color: #f1f5f9; padding: 24px; text-align: center; border-top: 1px solid #e2e8f0; }
+    .footer-text { color: #94a3b8; font-size: 12px; margin: 0 0 8px; }
+    .footer-link { color: #6366f1; text-decoration: none; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <table width="100%" cellpadding="0" cellspacing="0" border="0">
+        <tr>
+          <td align="center">
+             <div style="display:inline-block; vertical-align:middle;">
+                <img src="${COMPANY_LOGO_URL}" alt="LikLet" width="32" height="32" style="display:block; border-radius: 6px;" />
+             </div>
+             <span style="color:#ffffff; font-size:22px; font-weight:bold; margin-left:10px; vertical-align:middle;">${COMPANY_NAME}</span>
+          </td>
+        </tr>
+      </table>
+    </div>
+    <div class="content">
+      <h1 class="h1">${title}</h1>
+      <p class="p">${message}</p>
+      
+      <div class="otp-wrapper">
+        <div class="otp">${otp}</div>
+      </div>
+      
+      <p class="p" style="font-size: 14px; margin-top: 32px;">
+        This code expires in <strong>10 minutes</strong>.<br>
+        If you did not request this, please ignore this email.
+      </p>
+    </div>
+    <div class="footer">
+      <p class="footer-text">&copy; ${new Date().getFullYear()} ${COMPANY_NAME}. All rights reserved.</p>
+      <p class="footer-text">
+        Need help? <a href="${SUPPORT_LINK}" class="footer-link">Contact Support</a>
+      </p>
+    </div>
+  </div>
+</body>
+</html>
+  `;
+};
+
+/**
+ * Helper to send standardized OTP emails
+ */
+async function sendOtpEmail(toEmail, otp, type = "verification") {
+  let subject = "";
+  let title = "";
+  let message = "";
+
+  switch (type) {
+    case "verification":
+      subject = `${COMPANY_NAME} - Verify Your Email`;
+      title = "Verify Your Email";
+      message = `Welcome to ${COMPANY_NAME}! Please use the verification code below to verify your email address and complete your registration.`;
+      break;
+    case "password-reset":
+      subject = `${COMPANY_NAME} - Password Reset Request`;
+      title = "Reset Your Password";
+      message = "We received a request to reset your password. Use the code below to verify your identity and set a new password.";
+      break;
+    case "email-change":
+      subject = `${COMPANY_NAME} - Confirm Email Change`;
+      title = "Confirm New Email";
+      message = "You requested to update your email address. Please use the code below to verify this new email.";
+      break;
+    default:
+      subject = `${COMPANY_NAME} - Your Verification Code`;
+      title = "Verification Code";
+      message = "Here is your one-time verification code.";
+  }
+
+  const htmlContent = getEmailTemplate(title, message, otp);
+
+  await transporter.sendMail({
+    from: `"${COMPANY_NAME}" <${process.env.SMTP_USER}>`,
+    to: toEmail,
+    subject: subject,
+    html: htmlContent,
+  });
+}
+
+function generateOtp() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+// -----------------------------
+// 🔐 JWT Helpers
+// -----------------------------
+function signAccessToken(userId) {
+  return jwt.sign({ userId, type: "access" }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+}
+
+function signRefreshToken(userId) {
+  return jwt.sign({ userId, type: "refresh" }, JWT_SECRET, { expiresIn: REFRESH_TOKEN_EXPIRES_IN });
+}
+
+function setAuthCookies(res, { accessToken, refreshToken }) {
+  res.cookie("accessToken", accessToken, { ...cookieBase, maxAge: ACCESS_COOKIE_MAX_AGE, path: "/" });
+  res.cookie("refreshToken", refreshToken, { ...cookieBase, maxAge: REFRESH_COOKIE_MAX_AGE, path: "/user/refresh-token" });
+}
+
+function clearAuthCookies(res) {
+  res.clearCookie("accessToken", { path: "/" });
+  res.clearCookie("refreshToken", { path: "/user/refresh-token" });
+}
+
+// -----------------------------
+// 🚀 API CONTROLLERS
+// -----------------------------
+
+/**
  * 1️⃣ Send OTP (Email-only, stored in VerifiedEmail collection)
  * POST /user/request-otp
- * body: { email }
  */
 exports.requestOtpUser = async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ message: "Email is required" });
 
   const normEmail = email.trim().toLowerCase();
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  const code = generateOtp();
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
 
   try {
     await VerifiedEmail.findOneAndUpdate(
@@ -116,12 +217,8 @@ exports.requestOtpUser = async (req, res) => {
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
 
-    await transporter.sendMail({
-      from: `"No-Reply" <${process.env.SMTP_USER}>`,
-      to: normEmail,
-      subject: "Your Verification Code",
-      text: `Your code is ${code}. It expires in 10 minutes.`,
-    });
+    // Send styled HTML email
+    await sendOtpEmail(normEmail, code, "verification");
 
     return res.json({ message: "OTP sent to email" });
   } catch (err) {
@@ -133,7 +230,6 @@ exports.requestOtpUser = async (req, res) => {
 /**
  * 2️⃣ Verify OTP (marks email as verified in VerifiedEmail)
  * POST /user/verify-otp
- * body: { email, otp }
  */
 exports.verifyOtpUser = async (req, res) => {
   const { email, otp } = req.body;
@@ -168,7 +264,6 @@ exports.verifyOtpUser = async (req, res) => {
 /**
  * 3️⃣ Registration (allowed ONLY if email is verified in VerifiedEmail)
  * POST /user/register
- * body: { email, name, password, phone, countryId, callingId, gender }
  */
 exports.registerUser = async (req, res) => {
   const { email, name, password, phone, countryId, callingId, gender } = req.body;
@@ -237,10 +332,6 @@ exports.registerUser = async (req, res) => {
 /**
  * 4️⃣ Login (email + password)
  * POST /user/login
- * body: { email, password }
- *
- * ✅ NEW: sets HttpOnly cookies: accessToken + refreshToken
- * ✅ Still returns token/userId for backward compatibility (you can remove later)
  */
 exports.loginUser = async (req, res) => {
   const { email, password } = req.body;
@@ -260,10 +351,9 @@ exports.loginUser = async (req, res) => {
 
     setAuthCookies(res, { accessToken, refreshToken });
 
-    // Backward compatibility response (optional)
     return res.json({
       message: "Login successful",
-      token: accessToken, // keep for old frontend; remove later
+      token: accessToken, // backward compatibility
       userId: user.userId,
     });
   } catch (err) {
@@ -275,7 +365,6 @@ exports.loginUser = async (req, res) => {
 /**
  * ✅ Refresh Access Token
  * POST /user/refresh-token
- * Reads refreshToken from HttpOnly cookie and issues new cookies
  */
 exports.refreshToken = async (req, res) => {
   try {
@@ -299,7 +388,7 @@ exports.refreshToken = async (req, res) => {
 
     return res.json({
       message: "Token refreshed",
-      token: newAccess, // optional compat
+      token: newAccess,
       userId: user.userId,
     });
   } catch (err) {
@@ -319,15 +408,12 @@ exports.logoutUser = async (req, res) => {
 
 /**
  * Middleware to verify token
- * ✅ Supports:
- *  - Authorization: Bearer <token> (legacy)
- *  - HttpOnly cookie accessToken (new)
  */
 exports.verifyToken = (req, res, next) => {
   try {
     let token = null;
 
-    // 1) Prefer Authorization header (legacy)
+    // 1) Prefer Authorization header
     const authHeader = req.headers.authorization;
     if (authHeader) {
       const parts = authHeader.split(" ");
@@ -352,7 +438,7 @@ exports.verifyToken = (req, res, next) => {
 };
 
 /**
- * Get paginated users with search/sort (optional)
+ * Get paginated users
  * POST /user/getAll
  */
 exports.getAll = async (req, res) => {
@@ -390,7 +476,7 @@ exports.getAll = async (req, res) => {
 };
 
 /**
- * Get all users (flat array, for Admin Dashboard)
+ * Get all users (flat array)
  * GET /user/all
  */
 exports.getAllUsersSimple = async (req, res) => {
@@ -412,40 +498,70 @@ exports.getAllUsersSimple = async (req, res) => {
  */
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, phone, oldPassword, newPassword, userId } = req.body;
+    const { userId, name, phone, country, callingcode, gender, socialMedia, email } = req.body;
+
+    if (!userId) return res.status(400).json({ error: "userId is required" });
 
     const user = await User.findOne({ userId });
-    if (!user) return res.status(404).json({ message: "User not found" });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-    if (name) user.name = name;
-    if (phone) user.phone = phone.trim();
+    // socialMedia sanitize
+    const allowed = new Set(["instagram", "youtube", "linkedin"]);
+    const cleanedSocial = Array.isArray(socialMedia)
+      ? socialMedia
+          .filter((x) => x && allowed.has(x.platform))
+          .map((x) => ({
+            platform: x.platform,
+            url: String(x.url || "").trim(),
+          }))
+          .filter((x) => x.url)
+      : [];
 
-    if (newPassword) {
-      if (!oldPassword) return res.status(400).json({ message: "Old password is required" });
+    // Email update logic
+    if (email !== undefined) {
+      const newEmail = String(email).trim().toLowerCase();
 
-      const isMatch = await user.comparePassword(oldPassword);
-      if (!isMatch) return res.status(400).json({ message: "Old password is incorrect" });
+      if (newEmail && newEmail !== user.email) {
+        if (
+          !user.pendingEmail ||
+          user.pendingEmail !== newEmail ||
+          !user.emailChangeVerified ||
+          !user.emailChangeExpiresAt ||
+          new Date(user.emailChangeExpiresAt).getTime() < Date.now()
+        ) {
+          return res.status(400).json({
+            error: "Please verify OTP for the new email before updating.",
+          });
+        }
 
-      user.password = newPassword;
+        const exists = await User.findOne({ email: newEmail, userId: { $ne: userId } });
+        if (exists) {
+          return res.status(400).json({ error: "Email already in use" });
+        }
+
+        user.email = newEmail;
+        user.emailVerified = true;
+        user.pendingEmail = undefined;
+        user.emailChangeCodeHash = undefined;
+        user.emailChangeExpiresAt = undefined;
+        user.emailChangeVerified = false;
+      }
     }
+
+    if (name !== undefined) user.name = name;
+    if (phone !== undefined) user.phone = phone;
+    if (country !== undefined) user.country = country;
+    if (callingcode !== undefined) user.callingcode = callingcode;
+    if (gender !== undefined) user.gender = gender;
+
+    user.socialMedia = cleanedSocial;
 
     await user.save();
 
-    const safeUser = {
-      id: user.userId,
-      name: user.name,
-      email: user.email,
-      phone: user.phone,
-      createdAt: user.createdAt,
-    };
-
-    return res.status(200).json({ message: "Profile updated", user: safeUser });
+    return res.json({ data: user });
   } catch (err) {
-    console.error("UpdateProfile error:", err);
-    if (err && err.code === 11000 && err.keyPattern?.phone) {
-      return res.status(409).json({ message: "Phone already in use" });
-    }
-    return res.status(500).json({ message: "Internal server error" });
+    console.error(err);
+    return res.status(500).json({ error: "Failed to update profile" });
   }
 };
 
@@ -486,7 +602,7 @@ exports.requestPasswordReset = async (req, res) => {
   if (!email) return res.status(400).json({ message: "Email is required" });
 
   const normEmail = email.trim().toLowerCase();
-  const code = Math.floor(100000 + Math.random() * 900000).toString();
+  const code = generateOtp();
   const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
   try {
@@ -503,12 +619,8 @@ exports.requestPasswordReset = async (req, res) => {
     );
     if (!user) return res.status(404).json({ message: "No user with that email" });
 
-    await transporter.sendMail({
-      from: `"No-Reply" <${process.env.SMTP_USER}>`,
-      to: normEmail,
-      subject: "Your Password Reset Code",
-      text: `Your reset code is ${code}. It expires in 10 minutes.`,
-    });
+    // Send HTML Email
+    await sendOtpEmail(normEmail, code, "password-reset");
 
     return res.json({ message: "Reset OTP sent to email" });
   } catch (err) {
@@ -575,18 +687,31 @@ exports.resetPassword = async (req, res) => {
   }
 };
 
+/**
+ * Google Sign In
+ */
 exports.googleSignIn = async (req, res) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) return res.status(400).json({ message: "idToken is required" });
+    const { token } = req.body;
+    if (!token) return res.status(400).json({ message: "token is required" });
 
-    const decoded = await admin.auth().verifyIdToken(idToken);
-    const { uid, email, email_verified: emailVerified, name, picture } = decoded;
+    // Use native 'fetch'
+    const googleResponse = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (!googleResponse.ok) {
+      const errorText = await googleResponse.text();
+      console.error("Google API Error:", errorText);
+      return res.status(401).json({ message: "Invalid Google Access Token" });
+    }
+
+    const googleUser = await googleResponse.json();
+    const { sub: uid, email, email_verified: emailVerified, name, picture } = googleUser;
 
     if (!email) return res.status(400).json({ message: "Google account has no email" });
 
     const normEmail = email.trim().toLowerCase();
-
     let user = await User.findOne({ email: normEmail });
 
     if (!user) {
@@ -597,17 +722,22 @@ exports.googleSignIn = async (req, res) => {
         name: name || normEmail.split("@")[0],
         picture,
         emailVerified: !!emailVerified,
+        phone: undefined,
+        countryId: undefined,
+        callingId: undefined,
+        country: "Unknown",
+        callingcode: "0",
+        gender: 2,
       });
-      await user.save();
+      await user.save({ validateBeforeSave: false });
     } else {
       const updates = {};
       if (!user.googleUid) updates.googleUid = uid;
       if (typeof emailVerified === "boolean") updates.emailVerified = emailVerified;
       if (picture && !user.picture) updates.picture = picture;
-      if (name && !user.name) updates.name = name;
-      if (user.authProvider !== "google") updates.authProvider = user.authProvider || "google";
+      if (user.authProvider !== "google") updates.authProvider = "google";
 
-      if (Object.keys(updates).length) {
+      if (Object.keys(updates).length > 0) {
         await User.updateOne({ _id: user._id }, { $set: updates });
         user = await User.findById(user._id);
       }
@@ -633,7 +763,7 @@ exports.googleSignIn = async (req, res) => {
 
     return res.json({
       message: "Login successful",
-      token: accessToken, // compat
+      token: accessToken,
       userId: user.userId,
       user: safeUser,
     });
@@ -643,10 +773,12 @@ exports.googleSignIn = async (req, res) => {
   }
 };
 
+/**
+ * Get User Lite
+ */
 exports.getUserLite = async (req, res) => {
   try {
     const { userId } = req.body;
-
     if (!userId) return res.status(400).json({ message: "userId is required" });
 
     const user = await User.findOne({ userId }).select("userId name email country").lean();
@@ -663,5 +795,84 @@ exports.getUserLite = async (req, res) => {
   } catch (err) {
     console.error("getUserLite error:", err);
     return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Request Email Change OTP
+ */
+exports.requestEmailChangeOtp = async (req, res) => {
+  try {
+    const { userId, newEmail } = req.body;
+    if (!userId || !newEmail) {
+      return res.status(400).json({ error: "userId and newEmail are required" });
+    }
+
+    const email = String(newEmail).trim().toLowerCase();
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    const user = await User.findOne({ userId });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (user.email === email) {
+      return res.status(400).json({ error: "New email is same as current email" });
+    }
+
+    const exists = await User.findOne({ email, userId: { $ne: userId } });
+    if (exists) return res.status(400).json({ error: "Email already in use" });
+
+    const otp = generateOtp();
+    const salt = await bcrypt.genSalt(10);
+    const hash = await bcrypt.hash(otp, salt);
+
+    user.pendingEmail = email;
+    user.emailChangeCodeHash = hash;
+    user.emailChangeExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 mins
+    user.emailChangeVerified = false;
+    await user.save();
+
+    // Send HTML Email
+    await sendOtpEmail(email, otp, "email-change");
+
+    return res.json({ message: "OTP sent to new email" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to send OTP" });
+  }
+};
+
+/**
+ * Verify Email Change OTP
+ */
+exports.verifyEmailChangeOtp = async (req, res) => {
+  try {
+    const { userId, otp } = req.body;
+    if (!userId || !otp) {
+      return res.status(400).json({ error: "userId and otp are required" });
+    }
+
+    const user = await User.findOne({ userId });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (!user.pendingEmail || !user.emailChangeCodeHash || !user.emailChangeExpiresAt) {
+      return res.status(400).json({ error: "No pending email verification request" });
+    }
+
+    if (new Date(user.emailChangeExpiresAt).getTime() < Date.now()) {
+      return res.status(400).json({ error: "OTP expired. Please request again." });
+    }
+
+    const ok = await bcrypt.compare(String(otp).trim(), user.emailChangeCodeHash);
+    if (!ok) return res.status(400).json({ error: "Invalid OTP" });
+
+    user.emailChangeVerified = true;
+    await user.save();
+
+    return res.json({ message: "Email OTP verified" });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Failed to verify OTP" });
   }
 };

@@ -33,7 +33,7 @@ router.post('/getById', uc.getById);
 
 // ─── Protected / Write routes ────────────────────────────────────
 // Update profile (must be logged in)
-router.post('/update', uc.verifyToken, uc.updateProfile);
+router.post('/updateProfile', uc.verifyToken, uc.updateProfile);
 
 // ─── Admin-only routes ───────────────────────────────────────────
 // Simple flat list for dashboard
@@ -48,6 +48,10 @@ router.post("/userlite", uc.verifyToken, uc.getUserLite);
 
 router.post("/refresh-token", uc.refreshToken);
 router.post("/logout", uc.logoutUser);
+
+router.post("/requestEmailChangeOtp", uc.verifyToken, uc.requestEmailChangeOtp);
+router.post("/verifyEmailChangeOtp", uc.verifyToken, uc.verifyEmailChangeOtp);
+
 
 
 // ─── (Optional) direct lookup by param ──────────────────────────
