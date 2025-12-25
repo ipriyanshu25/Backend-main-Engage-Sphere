@@ -30,7 +30,8 @@ const defaultOrigins = [
   "https://liklet.com",
   "http://localhost:3000",
   "http://localhost:5173",
-  "https://liklet-git-main-ipriyanshu25s-projects.vercel.app/"
+  "https://liklet.vercel.app", // Added main production domain just in case
+  "https://liklet-git-main-ipriyanshu25s-projects.vercel.app", // ✅ FIXED: Removed trailing slash
 ];
 
 // FRONTEND_ORIGIN can be:
@@ -92,7 +93,10 @@ mongoose
       const col = db.collection("services");
 
       const idx = await col.indexes();
-      console.log("✅ services indexes:", idx.map((i) => i.name));
+      console.log(
+        "✅ services indexes:",
+        idx.map((i) => i.name)
+      );
 
       if (idx.some((i) => i.name === "serviceContent.contentId_1")) {
         await col.dropIndex("serviceContent.contentId_1");
